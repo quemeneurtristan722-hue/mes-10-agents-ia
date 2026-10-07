@@ -1,6 +1,7 @@
 streamlit
 langgraph
-langchain-google-genai>=2.0.1
+langchain-core
+langchain-google-genai
 langchain-groq
 langchain-mistralai
 langchain-community
@@ -10,3 +11,4 @@ pydantic
 pandas
 openpyxl
 pypdf
+
