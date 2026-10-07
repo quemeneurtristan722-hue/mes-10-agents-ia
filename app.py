@@ -5,7 +5,7 @@ from typing import TypedDict, Annotated, Literal
 import streamlit as st
 import pandas as pd
 from pypdf import PdfReader
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -24,14 +24,13 @@ groq_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
 mistral_key = st.secrets.get("MISTRAL_API_KEY", os.getenv("MISTRAL_API_KEY"))
 
 if not google_key or not groq_key or not mistral_key:
-    st.error("⚠️ Clés d'API manquantes dans les Secrets de Streamlit.")
+    st.error("⚠️ Clés d'API manquantes. Vérifie tes Secrets dans Streamlit (Manage app -> Settings -> Secrets).")
     st.stop()
 
-# --- INITIALISATION DES MODÈLES D'IA ---
+# --- INITIALISATION DES MODÈLES FIABILISÉS ---
 gemini_model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", api_key=google_key, temperature=0)
-llama_heavy = ChatGroq(model="llama-3.3-70b-versatile", api_key=groq_key, temperature=0)
-llama_fast = ChatGroq(model="llama-3.1-8b-instant", api_key=groq_key, temperature=0)
-deepseek_model = ChatGroq(model="deepseek-r1-distill-llama-70b", api_key=groq_key, temperature=0)
+groq_heavy = ChatGroq(model="llama-3.3-70b-versatile", api_key=groq_key, temperature=0)
+groq_fast = ChatGroq(model="llama-3.1-8b-instant", api_key=groq_key, temperature=0)
 mistral_coder = ChatMistralAI(model="codestral-latest", api_key=mistral_key, temperature=0)
 mistral_text = ChatMistralAI(model="mistral-small-latest", api_key=mistral_key, temperature=0)
 
@@ -61,31 +60,37 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], operator.add]
     next_step: str
 
-class Router(BaseModel):
-    next_agent: Literal[
-        "Chercheur", "Analyste", "Codeur", "DataExcel", 
-        "Redacteur", "Critic", "Traducteur", "Vision", "Formateur", "FINISH"
-    ] = Field(description="Nom du prochain agent ou FINISH.")
+VALID_AGENTS = ["Chercheur", "Analyste", "Codeur", "DataExcel", "Redacteur", "Critic", "Traducteur", "Vision", "Formateur", "FINISH"]
 
 # --- DÉFINITION DES 10 AGENTS ---
 def supervisor_node(state: AgentState):
     prompt = SystemMessage(content=(
         "Tu es le Superviseur d'une équipe de 9 agents experts.\n"
-        "Analyse la demande et attribue la main à l'agent le plus qualifié :\n"
-        "- 'Chercheur' : recherche web / actualités fraîches.\n"
-        "- 'Analyste' : logique pure, maths, raisonnement complexe.\n"
-        "- 'Codeur' : écriture/débogage de code informatique.\n"
-        "- 'DataExcel' : analyse de données, mise en forme de tableaux, exports Excel.\n"
-        "- 'Redacteur' : rédaction de textes, e-mails, rapports impeccables.\n"
-        "- 'Critic' : contrôle qualité des réponses fournies.\n"
-        "- 'Traducteur' : traduction et adaptation linguistique.\n"
-        "- 'Vision' : analyse de fichiers/visuels.\n"
-        "- 'Formateur' : explications pédagogiques simples.\n"
-        "- 'FINISH' : quand la réponse globale est complète et satisfaisante."
+        "Analyse le dernier message et réponds UNIQUEMENT par l'un de ces mots exacts :\n"
+        "Chercheur, Analyste, Codeur, DataExcel, Redacteur, Critic, Traducteur, Vision, Formateur, FINISH.\n\n"
+        "Règles :\n"
+        "- 'Chercheur' : si besoin de recherche web.\n"
+        "- 'Analyste' : si besoin de calcul ou logique.\n"
+        "- 'Codeur' : si besoin de programmation.\n"
+        "- 'DataExcel' : pour créer un fichier Excel.\n"
+        "- 'Redacteur' : pour rédiger/structurer la réponse.\n"
+        "- 'Critic' : pour relire et valider.\n"
+        "- 'Traducteur' : pour traduire.\n"
+        "- 'Vision' : analyse de document/image.\n"
+        "- 'Formateur' : pour expliquer simplement.\n"
+        "- 'FINISH' : si le travail est déjà fini et complet.\n"
+        "Ne réponds rien d'autre que le nom de l'agent."
     ))
-    planner = llama_heavy.with_structured_output(Router)
-    decision = planner.invoke([prompt] + state["messages"])
-    return {"next_step": decision.next_agent}
+    response = groq_heavy.invoke([prompt] + state["messages"]).content.strip()
+    
+    # Nettoyage pour extraction exacte du mot-clé
+    selected = "FINISH"
+    for agent in VALID_AGENTS:
+        if agent.lower() in response.lower():
+            selected = agent
+            break
+            
+    return {"next_step": selected}
 
 def researcher_node(state: AgentState):
     query = state["messages"][0].content
@@ -93,36 +98,35 @@ def researcher_node(state: AgentState):
         web_res = search_tool.run(query)
     except Exception as e:
         web_res = f"Recherche indisponible : {e}"
-    res = llama_heavy.invoke([SystemMessage(content=f"Tu es le Chercheur Web. Résultats web actuels :\n{web_res}\nSynthétise l'essentiel.")] + state["messages"])
+    res = groq_heavy.invoke([SystemMessage(content=f"Tu es le Chercheur Web. Résultats web :\n{web_res}\nSynthétise l'essentiel.")] + state["messages"])
     return {"messages": [res]}
 
 def analyst_node(state: AgentState):
-    res = deepseek_model.invoke([SystemMessage(content="Tu es l'Analyste Logique expert. Résous le problème étape par étape.")] + state["messages"])
+    res = groq_heavy.invoke([SystemMessage(content="Tu es l'Analyste Logique expert. Résous le problème étape par étape.")] + state["messages"])
     return {"messages": [res]}
 
 def coder_node(state: AgentState):
-    res = mistral_coder.invoke([SystemMessage(content="Tu es le Codeur Senior. Fournis du code fonctionnel et documenté.")] + state["messages"])
+    res = mistral_coder.invoke([SystemMessage(content="Tu es le Codeur Senior. Fournis du code propre et documenté.")] + state["messages"])
     return {"messages": [res]}
 
 def data_excel_node(state: AgentState):
     prompt = SystemMessage(content=(
-        "Tu es l'Expert Data et Excel.\n"
-        "Si un fichier Excel est demandé, génère obligatoirement un bloc de code Python (avec Pandas) "
-        "qui crée et enregistre le fichier sous le nom 'export_resultat.xlsx'."
+        "Tu es l'Expert Data/Excel. Si un fichier Excel est demandé, génère du code Python avec Pandas "
+        "enregistrant le fichier sous 'export_resultat.xlsx'."
     ))
-    res = llama_heavy.invoke([prompt] + state["messages"])
+    res = groq_heavy.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 def writer_node(state: AgentState):
-    res = mistral_text.invoke([SystemMessage(content="Tu es le Rédacteur. Soigne parfaitement la langue et la structure.")] + state["messages"])
+    res = mistral_text.invoke([SystemMessage(content="Tu es le Rédacteur. Soigne parfaitement la langue et la mise en page.")] + state["messages"])
     return {"messages": [res]}
 
 def critic_node(state: AgentState):
-    res = llama_heavy.invoke([SystemMessage(content="Tu es le Relecteur Qualité. Analyse et valide la réponse finale.")] + state["messages"])
+    res = groq_heavy.invoke([SystemMessage(content="Tu es le Relecteur Qualité. Valide ou affine la réponse finale.")] + state["messages"])
     return {"messages": [res]}
 
 def translator_node(state: AgentState):
-    res = llama_fast.invoke([SystemMessage(content="Tu es le Traducteur Expert.")] + state["messages"])
+    res = groq_fast.invoke([SystemMessage(content="Tu es le Traducteur Expert.")] + state["messages"])
     return {"messages": [res]}
 
 def vision_node(state: AgentState):
@@ -130,7 +134,7 @@ def vision_node(state: AgentState):
     return {"messages": [res]}
 
 def teacher_node(state: AgentState):
-    res = llama_heavy.invoke([SystemMessage(content="Tu es le Formateur. Explique clairement avec des mots simples.")] + state["messages"])
+    res = groq_heavy.invoke([SystemMessage(content="Tu es le Formateur. Explique clairement avec des mots simples.")] + state["messages"])
     return {"messages": [res]}
 
 # --- ASSEMBLAGE DU GRAPHE LANGGRAPH ---
@@ -161,7 +165,7 @@ for node in ["Chercheur", "Analyste", "Codeur", "DataExcel", "Redacteur", "Criti
 app_agents = workflow.compile()
 
 # --- INTERFACE UTILISATEUR ---
-user_prompt = st.text_area("Pose ta question ou décris ta demande :", placeholder="Ex : Recherche les derniers équipements réseaux, fais une analyse et crée un tableau comparatif...")
+user_prompt = st.text_area("Pose ta question ou décris ta demande :", placeholder="Ex : Recherche les derniers équipements réseaux et fais une synthèse...")
 uploaded_file = st.file_uploader("Joindre un fichier (PDF, Excel, TXT, CSV) - Optionnel", type=["pdf", "xlsx", "csv", "txt", "py", "md"])
 
 if st.button("🚀 Lancer les agents", type="primary"):
@@ -194,4 +198,4 @@ if st.button("🚀 Lancer les agents", type="primary"):
                                                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                                             )
                             except Exception as e:
-                                st.error(f"Erreur lors de la génération du fichier Excel : {e}")
+                                st.error(f"Erreur d'export Excel : {e}")
