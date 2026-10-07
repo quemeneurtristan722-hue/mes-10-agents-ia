@@ -5,6 +5,7 @@ langchain-groq
 langchain-mistralai
 langchain-community
 duckduckgo-search
+ddgs
 pydantic
 pandas
 openpyxl
