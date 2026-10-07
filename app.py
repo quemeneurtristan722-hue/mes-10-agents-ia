@@ -24,7 +24,7 @@ groq_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
 mistral_key = st.secrets.get("MISTRAL_API_KEY", os.getenv("MISTRAL_API_KEY"))
 
 if not google_key or not groq_key or not mistral_key:
-    st.error("⚠️ Clés d'API manquantes. Assure-toi d'avoir configuré GOOGLE_API_KEY, GROQ_API_KEY et MISTRAL_API_KEY dans les Secrets de Streamlit.")
+    st.error("⚠️ Clés d'API manquantes dans les Secrets de Streamlit.")
     st.stop()
 
 # --- INITIALISATION DES MODÈLES D'IA ---
@@ -83,7 +83,7 @@ def supervisor_node(state: AgentState):
         "- 'Formateur' : explications pédagogiques simples.\n"
         "- 'FINISH' : quand la réponse globale est complète et satisfaisante."
     ))
-    planner = gemini_model.with_structured_output(Router)
+    planner = llama_heavy.with_structured_output(Router)
     decision = planner.invoke([prompt] + state["messages"])
     return {"next_step": decision.next_agent}
 
@@ -118,7 +118,7 @@ def writer_node(state: AgentState):
     return {"messages": [res]}
 
 def critic_node(state: AgentState):
-    res = gemini_model.invoke([SystemMessage(content="Tu es le Relecteur Qualité. Analyse et valide la réponse finale.")] + state["messages"])
+    res = llama_heavy.invoke([SystemMessage(content="Tu es le Relecteur Qualité. Analyse et valide la réponse finale.")] + state["messages"])
     return {"messages": [res]}
 
 def translator_node(state: AgentState):
@@ -180,7 +180,6 @@ if st.button("🚀 Lancer les agents", type="primary"):
                         st.markdown(last_msg)
                         st.divider()
                         
-                        # Génération automatique d'un fichier Excel téléchargeable si le codeur/data produis un fichier
                         if "import pandas" in last_msg and "export_resultat.xlsx" in last_msg:
                             try:
                                 code_blocks = re.findall(r"```python(.*?)```", last_msg, re.DOTALL)
