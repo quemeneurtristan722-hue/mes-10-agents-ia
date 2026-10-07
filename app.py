@@ -5,36 +5,28 @@ import pandas as pd
 from pypdf import PdfReader
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_mistralai import ChatMistralAI
 
-# --- CONFIGURATION STREAMLIT ---
-st.set_page_config(page_title="Mes 10 Agents IA", page_icon="⚡", layout="wide")
-st.title("⚡ Équipe Multi-Agents (Version Stabilisée)")
+# --- CONFIGURATION INTERFACE STREAMLIT ---
+st.set_page_config(page_title="Mes Agents IA", page_icon="⚡", layout="wide")
+st.title("⚡ Équipe Multi-Agents (100 % Mistral AI)")
 
-# --- RÉCUPÉRATION ET VERIFICATION DES CLÉS ---
-google_key = st.secrets.get("GOOGLE_API_KEY", os.getenv("GOOGLE_API_KEY"))
+# --- RÉCUPÉRATION DE LA CLÉ MISTRAL ---
 mistral_key = st.secrets.get("MISTRAL_API_KEY", os.getenv("MISTRAL_API_KEY"))
 
-with st.sidebar:
-    st.header("🔑 État des connexions API")
-    st.write("Google AI Studio :", "🟢 OK" if google_key else "🔴 Manquante")
-    st.write("Mistral AI :", "🟢 OK" if mistral_key else "🔴 Manquante")
-
-if not google_key or not mistral_key:
-    st.error("Configure tes clés GOOGLE_API_KEY et MISTRAL_API_KEY dans Secrets (Manage app -> Settings -> Secrets).")
+if not mistral_key:
+    st.error("⚠️ La clé MISTRAL_API_KEY est manquante dans les Secrets Streamlit (Manage app -> Settings -> Secrets).")
     st.stop()
 
-# --- INITIALISATION DES MODÈLES D'ÉQUIPE ---
+# --- INITIALISATION DES MODÈLES MISTRAL ---
 try:
-    gemini_llm = ChatGoogleGenerativeAI(model="gemini-1.5-flash", api_key=google_key, temperature=0)
-    mistral_text_llm = ChatMistralAI(model="mistral-small-latest", api_key=mistral_key, temperature=0)
-    mistral_code_llm = ChatMistralAI(model="codestral-latest", api_key=mistral_key, temperature=0)
+    llm_text = ChatMistralAI(model="mistral-small-latest", api_key=mistral_key, temperature=0)
+    llm_code = ChatMistralAI(model="codestral-latest", api_key=mistral_key, temperature=0)
 except Exception as e:
-    st.error(f"Erreur d'initialisation des modèles : {e}")
+    st.error(f"Erreur d'initialisation Mistral : {e}")
     st.stop()
 
-# --- EXTRACTION DE FICHIERS ---
+# --- EXTRACTION DES FICHIERS ---
 def extract_file_content(file_obj) -> str:
     if file_obj is None:
         return ""
@@ -53,66 +45,56 @@ def extract_file_content(file_obj) -> str:
         return f"\n[Erreur de lecture : {e}]"
     return f"\n[Fichier joint : {file_obj.name}]"
 
-# --- DÉFINITION DES ROLES D'AGENTS ---
-AGENTS_ROLES = {
-    "1. Superviseur": (gemini_llm, "Tu es le Superviseur. Analyse la demande globale et planifie le travail."),
-    "2. Chercheur": (mistral_text_llm, "Tu es le Chercheur. Réponds avec tes connaissances actualisées de manière factuelle."),
-    "3. Analyste": (gemini_llm, "Tu es l'Analyste Logique. Traite le problème étape par étape."),
-    "4. Codeur": (mistral_code_llm, "Tu es le Codeur Senior. Écris du code propre et documenté."),
-    "5. DataExcel": (mistral_text_llm, "Tu es l'Expert Data. Si un tableau est demandé, génère du code Python Pandas créant 'export_resultat.xlsx'."),
-    "6. Rédacteur": (mistral_text_llm, "Tu es le Rédacteur. Soigne la structure et le style du texte en français."),
-    "7. Critic": (gemini_llm, "Tu es le Relecteur Qualité. Détecte les erreurs et valide le travail."),
-    "8. Traducteur": (mistral_text_llm, "Tu es le Traducteur Expert multilingue."),
-    "9. Vision": (gemini_llm, "Tu es l'Expert Vision et Analyse documentaire."),
-    "10. Formateur": (mistral_text_llm, "Tu es le Formateur Pédagogue. Explique simplement les concepts.")
-}
-
 # --- INTERFACE UTILISATEUR ---
-user_prompt = st.text_area("Saisis ta demande :", placeholder="Exemple : Analyse ces données et rédige une synthèse...")
+user_prompt = st.text_area("Saisis ta demande :", placeholder="Ex : Analyse ces données, fais une synthèse et crée un tableau Excel...")
 uploaded_file = st.file_uploader("Joindre un fichier (Optionnel)", type=["pdf", "xlsx", "csv", "txt", "py", "md"])
 
-if st.button("🚀 Lancer l'analyse", type="primary"):
+if st.button("🚀 Lancer l'équipe d'agents", type="primary"):
     if not user_prompt and not uploaded_file:
-        st.warning("Merci de saisir un texte ou de déposer un fichier.")
+        st.warning("Merci de saisir un texte ou de joindre un fichier.")
     else:
         full_context = user_prompt + extract_file_content(uploaded_file)
         
-        # Étape 1 : Analyse par le Superviseur
         with st.status("Traitement par l'équipe d'agents...", expanded=True) as status:
-            st.write("🤖 **Analyse du Superviseur...**")
-            try:
-                sup_response = gemini_llm.invoke([
-                    SystemMessage(content="Tu es le Superviseur. Choisis les 2 agents les plus pertinents parmi : Chercheur, Analyste, Codeur, DataExcel, Redacteur, Traducteur, Formateur."),
-                    HumanMessage(content=full_context)
+            # 1. Superviseur
+            st.write("🤖 **Superviseur :** Analyse et répartition des tâches...")
+            plan = llm_text.invoke([
+                SystemMessage(content="Tu es le Superviseur. Définis rapidement la stratégie pour répondre au mieux à la demande."),
+                HumanMessage(content=full_context)
+            ]).content
+            st.markdown(f"**Plan d'action :**\n{plan}")
+            st.divider()
+
+            # 2. Agent Réalisateur / Analyste
+            st.write("🤖 **Expert Rédacteur & Analyste :** Traitement principal...")
+            response = llm_text.invoke([
+                SystemMessage(content="Tu es l'Expert Principal. Réponds à la demande de manière complète, rigoureuse et bien structurée en français."),
+                HumanMessage(content=f"Demande initiale : {full_context}\n\nPlan à suivre : {plan}")
+            ]).content
+            st.markdown(response)
+            st.divider()
+
+            # 3. Agent Codeur / Data (si besoin d'Excel)
+            if "excel" in user_prompt.lower() or "tableau" in user_prompt.lower():
+                st.write("🤖 **Expert Data & Codeur :** Génération du fichier Excel...")
+                code_res = llm_code.invoke([
+                    SystemMessage(content="Génère du code Python exécutable avec Pandas pour créer un DataFrame et le sauvegarder sous le nom 'export_resultat.xlsx'."),
+                    HumanMessage(content=response)
                 ]).content
-                st.markdown(f"**Plan du Superviseur :**\n{sup_response}")
-                st.divider()
-            except Exception as e:
-                st.error(f"Erreur du Superviseur : {e}")
-                st.stop()
-            
-            # Étape 2 : Traitement principal par le Rédacteur/Analyste
-            st.write("🤖 **Exécution de la tâche...**")
-            try:
-                main_response = mistral_text_llm.invoke([
-                    SystemMessage(content="Tu es l'agent principal. Traite la demande de manière complète et détaillée."),
-                    HumanMessage(content=full_context)
-                ]).content
-                st.markdown(main_response)
-            except Exception as e:
-                st.error(f"Erreur d'exécution : {e}")
-                st.stop()
                 
-            status.update(label="Analyse terminée !", state="complete")
-            
-            # Génération d'un fichier Excel si du code Pandas est détecté
-            if "import pandas" in main_response and "export_resultat.xlsx" in main_response:
                 try:
-                    code_blocks = re.findall(r"```python(.*?)```", main_response, re.DOTALL)
+                    code_blocks = re.findall(r"```python(.*?)```", code_res, re.DOTALL)
                     if code_blocks:
                         exec(code_blocks[-1], globals())
                         if os.path.exists("export_resultat.xlsx"):
                             with open("export_resultat.xlsx", "rb") as f:
-                                st.download_button("📥 Télécharger le fichier Excel", f, file_name="export_resultat.xlsx")
+                                st.download_button(
+                                    "📥 Télécharger le fichier Excel généré",
+                                    f,
+                                    file_name="export_resultat.xlsx",
+                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                                )
                 except Exception as e:
-                    st.error(f"Erreur d'export Excel : {e}")
+                    st.error(f"Erreur de création Excel : {e}")
+
+            status.update(label="Analyse terminée avec succès !", state="complete")
