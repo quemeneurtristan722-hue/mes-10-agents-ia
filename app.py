@@ -8,40 +8,28 @@ from pypdf import PdfReader
 
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_groq import ChatGroq
 from langchain_mistralai import ChatMistralAI
 from langchain_community.tools import DuckDuckGoSearchRun
 from langgraph.graph import StateGraph, START, END
 
 # --- INTERFACE STREAMLIT ---
 st.set_page_config(page_title="Mes 10 Agents IA", page_icon="⚡", layout="wide")
-st.title("⚡ Équipe Multi-Agents à 10 IA (Ultra-Résiliente)")
+st.title("⚡ Équipe Multi-Agents à 10 IA (Mistral & Gemini)")
 
 # --- RÉCUPÉRATION DES CLÉS D'API ---
 google_key = st.secrets.get("GOOGLE_API_KEY", os.getenv("GOOGLE_API_KEY"))
-groq_key = st.secrets.get("GROQ_API_KEY", os.getenv("GROQ_API_KEY"))
 mistral_key = st.secrets.get("MISTRAL_API_KEY", os.getenv("MISTRAL_API_KEY"))
 
-if not google_key or not groq_key or not mistral_key:
-    st.error("⚠️ Clés d'API manquantes dans les Secrets Streamlit (Manage app -> Settings -> Secrets).")
+if not google_key or not mistral_key:
+    st.error("⚠️ Clés GOOGLE_API_KEY et MISTRAL_API_KEY requises dans les Secrets Streamlit.")
     st.stop()
 
-# --- INITIALISATION DES MODÈLES AVEC NOMS RIGOUREUSEMENT STABLES ---
+# --- INITIALISATION DES MODÈLES STABLES ---
 gemini_model = ChatGoogleGenerativeAI(model="gemini-1.5-flash", api_key=google_key, temperature=0)
-groq_fast = ChatGroq(model="llama-3.1-8b-instant", api_key=groq_key, temperature=0)
-mistral_coder = ChatMistralAI(model="codestral-latest", api_key=mistral_key, temperature=0)
 mistral_text = ChatMistralAI(model="mistral-small-latest", api_key=mistral_key, temperature=0)
+mistral_coder = ChatMistralAI(model="codestral-latest", api_key=mistral_key, temperature=0)
 
 search_tool = DuckDuckGoSearchRun()
-
-# --- FONCTION D'APPEL SÉCURISÉ (AVEC SECOURS AUTOMATIQUE) ---
-def safe_llm_call(primary_llm, fallback_llm, messages):
-    """Exécute le LLM principal et bascule sur le LLM de secours en cas d'erreur API."""
-    try:
-        return primary_llm.invoke(messages)
-    except Exception as e:
-        st.warning(f"Bascule automatique de modèle suite à une indisponibilité : {e}")
-        return fallback_llm.invoke(messages)
 
 # --- EXTRACTION DE FICHIERS ---
 def extract_file_content(file_obj) -> str:
@@ -83,11 +71,11 @@ def supervisor_node(state: AgentState):
         "- 'Redacteur' : rédaction de textes/rapports.\n"
         "- 'Critic' : contrôle qualité des réponses.\n"
         "- 'Traducteur' : traduction.\n"
-        "- 'Vision' : analyse de document visualisable.\n"
+        "- 'Vision' : analyse de document/image.\n"
         "- 'Formateur' : explications simples.\n"
         "- 'FINISH' : quand la demande est totalement traitée."
     ))
-    res = safe_llm_call(groq_fast, mistral_text, [prompt] + state["messages"])
+    res = mistral_text.invoke([prompt] + state["messages"])
     response_text = res.content.strip()
     
     selected = "FINISH"
@@ -105,17 +93,17 @@ def researcher_node(state: AgentState):
     except Exception as e:
         web_res = f"Recherche Web indisponible : {e}"
     prompt = SystemMessage(content=f"Tu es le Chercheur Web. Résultats de recherche :\n{web_res}\nSynthétise l'essentiel.")
-    res = safe_llm_call(groq_fast, gemini_model, [prompt] + state["messages"])
+    res = mistral_text.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 def analyst_node(state: AgentState):
-    prompt = SystemMessage(content="Tu es l'Analyste Logique expert. Résous le problème étape par étape.")
-    res = safe_llm_call(groq_fast, mistral_text, [prompt] + state["messages"])
+    prompt = SystemMessage(content="Tu es l'Analyste Logique expert. Résous le problème étape par étape avec rigueur.")
+    res = gemini_model.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 def coder_node(state: AgentState):
     prompt = SystemMessage(content="Tu es le Codeur Senior. Fournis du code fonctionnel et propre.")
-    res = safe_llm_call(mistral_coder, groq_fast, [prompt] + state["messages"])
+    res = mistral_coder.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 def data_excel_node(state: AgentState):
@@ -123,32 +111,32 @@ def data_excel_node(state: AgentState):
         "Tu es l'Expert Data/Excel. Si un fichier est demandé, génère du code Python avec Pandas "
         "créant le fichier 'export_resultat.xlsx'."
     ))
-    res = safe_llm_call(groq_fast, mistral_text, [prompt] + state["messages"])
+    res = mistral_text.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 def writer_node(state: AgentState):
     prompt = SystemMessage(content="Tu es le Rédacteur. Soigne parfaitement la langue et la structure.")
-    res = safe_llm_call(mistral_text, groq_fast, [prompt] + state["messages"])
+    res = mistral_text.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 def critic_node(state: AgentState):
     prompt = SystemMessage(content="Tu es le Relecteur Qualité. Analyse et valide la réponse finale.")
-    res = safe_llm_call(gemini_model, groq_fast, [prompt] + state["messages"])
+    res = gemini_model.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 def translator_node(state: AgentState):
     prompt = SystemMessage(content="Tu es le Traducteur Expert.")
-    res = safe_llm_call(groq_fast, mistral_text, [prompt] + state["messages"])
+    res = mistral_text.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 def vision_node(state: AgentState):
     prompt = SystemMessage(content="Tu es l'Expert Vision et Documentaire.")
-    res = safe_llm_call(gemini_model, mistral_text, [prompt] + state["messages"])
+    res = gemini_model.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 def teacher_node(state: AgentState):
     prompt = SystemMessage(content="Tu es le Formateur. Explique clairement avec des mots simples.")
-    res = safe_llm_call(groq_fast, mistral_text, [prompt] + state["messages"])
+    res = mistral_text.invoke([prompt] + state["messages"])
     return {"messages": [res]}
 
 # --- WORKFLOW LANGGRAPH ---
@@ -213,4 +201,3 @@ if st.button("🚀 Lancer les agents", type="primary"):
                                             )
                             except Exception as e:
                                 st.error(f"Erreur d'export Excel : {e}")
-
