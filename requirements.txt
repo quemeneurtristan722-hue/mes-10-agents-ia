@@ -1,0 +1,11 @@
+streamlit
+langgraph
+langchain-google-genai
+langchain-groq
+langchain-mistralai
+langchain-community
+duckduckgo-search
+pydantic
+pandas
+openpyxl
+pypdf
