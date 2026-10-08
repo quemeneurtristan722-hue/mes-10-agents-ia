@@ -1,5 +1,6 @@
 import os
 import re
+import httpx
 import streamlit as st
 import pandas as pd
 from pypdf import PdfReader
@@ -9,21 +10,22 @@ from langchain_mistralai import ChatMistralAI
 
 # --- CONFIGURATION INTERFACE STREAMLIT ---
 st.set_page_config(page_title="Mes Agents IA", page_icon="⚡", layout="wide")
-st.title("⚡ Équipe Multi-Agents (100 % Mistral AI)")
+st.title("⚡ Équipe Multi-Agents (Mistral AI)")
 
-# --- RÉCUPÉRATION DE LA CLÉ MISTRAL ---
-mistral_key = st.secrets.get("MISTRAL_API_KEY", os.getenv("MISTRAL_API_KEY"))
+# --- RÉCUPÉRATION ET NETTOYAGE DE LA CLÉ ---
+raw_key = st.secrets.get("MISTRAL_API_KEY", os.getenv("MISTRAL_API_KEY", ""))
+mistral_key = raw_key.strip().strip('"').strip("'")
 
 if not mistral_key:
     st.error("⚠️ La clé MISTRAL_API_KEY est manquante dans les Secrets Streamlit (Manage app -> Settings -> Secrets).")
     st.stop()
 
-# --- INITIALISATION DES MODÈLES MISTRAL ---
+# --- INITIALISATION ---
 try:
     llm_text = ChatMistralAI(model="mistral-small-latest", api_key=mistral_key, temperature=0)
     llm_code = ChatMistralAI(model="codestral-latest", api_key=mistral_key, temperature=0)
 except Exception as e:
-    st.error(f"Erreur d'initialisation Mistral : {e}")
+    st.error(f"Erreur d'initialisation : {e}")
     st.stop()
 
 # --- EXTRACTION DES FICHIERS ---
@@ -58,31 +60,44 @@ if st.button("🚀 Lancer l'équipe d'agents", type="primary"):
         with st.status("Traitement par l'équipe d'agents...", expanded=True) as status:
             # 1. Superviseur
             st.write("🤖 **Superviseur :** Analyse et répartition des tâches...")
-            plan = llm_text.invoke([
-                SystemMessage(content="Tu es le Superviseur. Définis rapidement la stratégie pour répondre au mieux à la demande."),
-                HumanMessage(content=full_context)
-            ]).content
-            st.markdown(f"**Plan d'action :**\n{plan}")
-            st.divider()
+            try:
+                plan = llm_text.invoke([
+                    SystemMessage(content="Tu es le Superviseur. Définis rapidement la stratégie pour répondre au mieux à la demande."),
+                    HumanMessage(content=full_context)
+                ]).content
+                st.markdown(f"**Plan d'action :**\n{plan}")
+                st.divider()
+            except httpx.HTTPStatusError as e:
+                status.update(label="Erreur API Mistral", state="error")
+                st.error(f"❌ **Erreur HTTP Mistral {e.response.status_code}** : {e.response.text}")
+                st.stop()
+            except Exception as e:
+                status.update(label="Erreur inconnue", state="error")
+                st.error(f"❌ **Erreur API** : {e}")
+                st.stop()
 
             # 2. Agent Réalisateur / Analyste
             st.write("🤖 **Expert Rédacteur & Analyste :** Traitement principal...")
-            response = llm_text.invoke([
-                SystemMessage(content="Tu es l'Expert Principal. Réponds à la demande de manière complète, rigoureuse et bien structurée en français."),
-                HumanMessage(content=f"Demande initiale : {full_context}\n\nPlan à suivre : {plan}")
-            ]).content
-            st.markdown(response)
-            st.divider()
+            try:
+                response = llm_text.invoke([
+                    SystemMessage(content="Tu es l'Expert Principal. Réponds à la demande de manière complète et bien structurée en français."),
+                    HumanMessage(content=f"Demande initiale : {full_context}\n\nPlan à suivre : {plan}")
+                ]).content
+                st.markdown(response)
+                st.divider()
+            except Exception as e:
+                st.error(f"Erreur du Rédacteur : {e}")
+                st.stop()
 
             # 3. Agent Codeur / Data (si besoin d'Excel)
             if "excel" in user_prompt.lower() or "tableau" in user_prompt.lower():
                 st.write("🤖 **Expert Data & Codeur :** Génération du fichier Excel...")
-                code_res = llm_code.invoke([
-                    SystemMessage(content="Génère du code Python exécutable avec Pandas pour créer un DataFrame et le sauvegarder sous le nom 'export_resultat.xlsx'."),
-                    HumanMessage(content=response)
-                ]).content
-                
                 try:
+                    code_res = llm_code.invoke([
+                        SystemMessage(content="Génère du code Python exécutable avec Pandas pour créer un DataFrame et le sauvegarder sous le nom 'export_resultat.xlsx'."),
+                        HumanMessage(content=response)
+                    ]).content
+                    
                     code_blocks = re.findall(r"```python(.*?)```", code_res, re.DOTALL)
                     if code_blocks:
                         exec(code_blocks[-1], globals())
