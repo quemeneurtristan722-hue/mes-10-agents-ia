@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import httpx
 import streamlit as st
 import pandas as pd
@@ -17,7 +18,7 @@ raw_key = st.secrets.get("MISTRAL_API_KEY", os.getenv("MISTRAL_API_KEY", ""))
 mistral_key = raw_key.strip().strip('"').strip("'")
 
 if not mistral_key:
-    st.error("⚠️ La clé MISTRAL_API_KEY est manquante dans les Secrets Streamlit (Manage app -> Settings -> Secrets).")
+    st.error("⚠️ La clé MISTRAL_API_KEY est manquante dans les Secrets Streamlit.")
     st.stop()
 
 # --- INITIALISATION ---
@@ -27,6 +28,25 @@ try:
 except Exception as e:
     st.error(f"Erreur d'initialisation : {e}")
     st.stop()
+
+# --- FONCTION D'APPEL AVEC PAUSE ET RÉESSAI AUTOMATIQUE (GÈRE L'ERREUR 429) ---
+def invoke_with_retry(llm, messages, max_retries=3, delay=5):
+    """Exécute le LLM et gère les limites de débit 429 avec pause automatique."""
+    for attempt in range(max_retries):
+        try:
+            return llm.invoke(messages)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 429 and attempt < max_retries - 1:
+                st.info(f"⏳ Limite de débit atteinte (429). Pause de {delay}s avant réessai ({attempt + 1}/{max_retries})...")
+                time.sleep(delay)
+            else:
+                raise e
+        except Exception as e:
+            if "429" in str(e) and attempt < max_retries - 1:
+                st.info(f"⏳ Limite atteinte. Pause de {delay}s ({attempt + 1}/{max_retries})...")
+                time.sleep(delay)
+            else:
+                raise e
 
 # --- EXTRACTION DES FICHIERS ---
 def extract_file_content(file_obj) -> str:
@@ -61,44 +81,47 @@ if st.button("🚀 Lancer l'équipe d'agents", type="primary"):
             # 1. Superviseur
             st.write("🤖 **Superviseur :** Analyse et répartition des tâches...")
             try:
-                plan = llm_text.invoke([
+                plan_res = invoke_with_retry(llm_text, [
                     SystemMessage(content="Tu es le Superviseur. Définis rapidement la stratégie pour répondre au mieux à la demande."),
                     HumanMessage(content=full_context)
-                ]).content
+                ])
+                plan = plan_res.content
                 st.markdown(f"**Plan d'action :**\n{plan}")
                 st.divider()
-            except httpx.HTTPStatusError as e:
-                status.update(label="Erreur API Mistral", state="error")
-                st.error(f"❌ **Erreur HTTP Mistral {e.response.status_code}** : {e.response.text}")
-                st.stop()
             except Exception as e:
-                status.update(label="Erreur inconnue", state="error")
-                st.error(f"❌ **Erreur API** : {e}")
+                status.update(label="Erreur API", state="error")
+                st.error(f"❌ Erreur lors de l'analyse du Superviseur : {e}")
                 st.stop()
+
+            # Pause préventive de 2s pour respecter les quotas
+            time.sleep(2)
 
             # 2. Agent Réalisateur / Analyste
             st.write("🤖 **Expert Rédacteur & Analyste :** Traitement principal...")
             try:
-                response = llm_text.invoke([
+                response_res = invoke_with_retry(llm_text, [
                     SystemMessage(content="Tu es l'Expert Principal. Réponds à la demande de manière complète et bien structurée en français."),
                     HumanMessage(content=f"Demande initiale : {full_context}\n\nPlan à suivre : {plan}")
-                ]).content
+                ])
+                response = response_res.content
                 st.markdown(response)
                 st.divider()
             except Exception as e:
-                st.error(f"Erreur du Rédacteur : {e}")
+                status.update(label="Erreur API", state="error")
+                st.error(f"❌ Erreur du Rédacteur : {e}")
                 st.stop()
 
             # 3. Agent Codeur / Data (si besoin d'Excel)
             if "excel" in user_prompt.lower() or "tableau" in user_prompt.lower():
+                time.sleep(2)
                 st.write("🤖 **Expert Data & Codeur :** Génération du fichier Excel...")
                 try:
-                    code_res = llm_code.invoke([
+                    code_res = invoke_with_retry(llm_code, [
                         SystemMessage(content="Génère du code Python exécutable avec Pandas pour créer un DataFrame et le sauvegarder sous le nom 'export_resultat.xlsx'."),
                         HumanMessage(content=response)
-                    ]).content
+                    ])
                     
-                    code_blocks = re.findall(r"```python(.*?)```", code_res, re.DOTALL)
+                    code_blocks = re.findall(r"```python(.*?)```", code_res.content, re.DOTALL)
                     if code_blocks:
                         exec(code_blocks[-1], globals())
                         if os.path.exists("export_resultat.xlsx"):
