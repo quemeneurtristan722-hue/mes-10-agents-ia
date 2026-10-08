@@ -29,24 +29,20 @@ except Exception as e:
     st.error(f"Erreur d'initialisation : {e}")
     st.stop()
 
-# --- FONCTION D'APPEL AVEC PAUSE ET RÉESSAI AUTOMATIQUE (GÈRE L'ERREUR 429) ---
-def invoke_with_retry(llm, messages, max_retries=3, delay=5):
-    """Exécute le LLM et gère les limites de débit 429 avec pause automatique."""
-    for attempt in range(max_retries):
-        try:
+# --- FONCTION D'APPEL TEMPORISÉ ET SÉCURISÉ ---
+def call_agent_with_tempo(llm, messages, agent_name: str, pause_seconds=4):
+    """Fait une pause préventive avant de solliciter l'agent pour respecter les quotas."""
+    st.write(f"⏳ **{agent_name}** prépare sa réponse (pause de sécurité de {pause_seconds}s)...")
+    time.sleep(pause_seconds)
+    
+    try:
+        return llm.invoke(messages)
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 429:
+            st.warning("⚠️ Quota temporairement dépassé. Seconde pause de sécurité (6s)...")
+            time.sleep(6)
             return llm.invoke(messages)
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 429 and attempt < max_retries - 1:
-                st.info(f"⏳ Limite de débit atteinte (429). Pause de {delay}s avant réessai ({attempt + 1}/{max_retries})...")
-                time.sleep(delay)
-            else:
-                raise e
-        except Exception as e:
-            if "429" in str(e) and attempt < max_retries - 1:
-                st.info(f"⏳ Limite atteinte. Pause de {delay}s ({attempt + 1}/{max_retries})...")
-                time.sleep(delay)
-            else:
-                raise e
+        raise e
 
 # --- EXTRACTION DES FICHIERS ---
 def extract_file_content(file_obj) -> str:
@@ -77,49 +73,57 @@ if st.button("🚀 Lancer l'équipe d'agents", type="primary"):
     else:
         full_context = user_prompt + extract_file_content(uploaded_file)
         
-        with st.status("Traitement par l'équipe d'agents...", expanded=True) as status:
+        with st.status("Collaboration des agents en cours...", expanded=True) as status:
             # 1. Superviseur
-            st.write("🤖 **Superviseur :** Analyse et répartition des tâches...")
             try:
-                plan_res = invoke_with_retry(llm_text, [
-                    SystemMessage(content="Tu es le Superviseur. Définis rapidement la stratégie pour répondre au mieux à la demande."),
-                    HumanMessage(content=full_context)
-                ])
+                plan_res = call_agent_with_tempo(
+                    llm_text,
+                    [
+                        SystemMessage(content="Tu es le Superviseur. Définis rapidement la stratégie pour répondre au mieux à la demande."),
+                        HumanMessage(content=full_context)
+                    ],
+                    agent_name="Superviseur",
+                    pause_seconds=1 # Première requête immédiate
+                )
                 plan = plan_res.content
                 st.markdown(f"**Plan d'action :**\n{plan}")
                 st.divider()
             except Exception as e:
-                status.update(label="Erreur API", state="error")
-                st.error(f"❌ Erreur lors de l'analyse du Superviseur : {e}")
+                status.update(label="Erreur d'exécution", state="error")
+                st.error(f"❌ Erreur du Superviseur : {e}")
                 st.stop()
 
-            # Pause préventive de 2s pour respecter les quotas
-            time.sleep(2)
-
             # 2. Agent Réalisateur / Analyste
-            st.write("🤖 **Expert Rédacteur & Analyste :** Traitement principal...")
             try:
-                response_res = invoke_with_retry(llm_text, [
-                    SystemMessage(content="Tu es l'Expert Principal. Réponds à la demande de manière complète et bien structurée en français."),
-                    HumanMessage(content=f"Demande initiale : {full_context}\n\nPlan à suivre : {plan}")
-                ])
+                response_res = call_agent_with_tempo(
+                    llm_text,
+                    [
+                        SystemMessage(content="Tu es l'Expert Principal. Réponds à la demande de manière complète et bien structurée en français."),
+                        HumanMessage(content=f"Demande initiale : {full_context}\n\nPlan à suivre : {plan}")
+                    ],
+                    agent_name="Expert Rédacteur",
+                    pause_seconds=4 # Pause préventive de 4s
+                )
                 response = response_res.content
                 st.markdown(response)
                 st.divider()
             except Exception as e:
-                status.update(label="Erreur API", state="error")
+                status.update(label="Erreur d'exécution", state="error")
                 st.error(f"❌ Erreur du Rédacteur : {e}")
                 st.stop()
 
             # 3. Agent Codeur / Data (si besoin d'Excel)
             if "excel" in user_prompt.lower() or "tableau" in user_prompt.lower():
-                time.sleep(2)
-                st.write("🤖 **Expert Data & Codeur :** Génération du fichier Excel...")
                 try:
-                    code_res = invoke_with_retry(llm_code, [
-                        SystemMessage(content="Génère du code Python exécutable avec Pandas pour créer un DataFrame et le sauvegarder sous le nom 'export_resultat.xlsx'."),
-                        HumanMessage(content=response)
-                    ])
+                    code_res = call_agent_with_tempo(
+                        llm_code,
+                        [
+                            SystemMessage(content="Génère du code Python exécutable avec Pandas pour créer un DataFrame et le sauvegarder sous le nom 'export_resultat.xlsx'."),
+                            HumanMessage(content=response)
+                        ],
+                        agent_name="Expert Data / Excel",
+                        pause_seconds=4 # Pause préventive de 4s
+                    )
                     
                     code_blocks = re.findall(r"```python(.*?)```", code_res.content, re.DOTALL)
                     if code_blocks:
